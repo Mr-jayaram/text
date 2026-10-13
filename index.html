@@ -6,11 +6,11 @@
   <title>VoiceScribe - Continuous Voice-to-Text Dictation</title>
   <meta name="description" content="A professional, continuous voice-to-text web application powered by the Web Speech API with automatic session restart, multi-language support, and live speech transcription.">
 
-  <!-- Google Fonts: Plus Jakarta Sans for UI + Noto Sans for Indic Scripts -->
+  <!-- Google Fonts: Plus Jakarta Sans for UI + Noto Sans Tamil & Mukta Malar for High-Quality Tamil Typography -->
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%230284c7%22><path d=%22M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z%22/><path d=%22M19 10v2a7 7 0 0 1-14 0v-2%22 fill=%22none%22 stroke=%22%230284c7%22 stroke-width=%222%22/></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Noto+Sans+Devanagari:wght@400;600&family=Noto+Sans+Tamil:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Mukta+Malar:wght@400;500;600;700&family=Noto+Sans+Tamil:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Noto+Sans+Devanagari:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
   <link rel="stylesheet" href="style.css">
 </head>
@@ -51,7 +51,7 @@
         </div>
         <div class="brand-info">
           <h1 class="brand-title">VoiceScribe <span class="brand-badge">Pro</span></h1>
-          <p class="brand-subtitle">Continuous Voice-to-Text Dictation</p>
+          <p class="brand-subtitle">Continuous Voice-to-Text Dictation &bull; குரல்வழி தட்டச்சு</p>
         </div>
       </div>
 
@@ -74,10 +74,20 @@
           </label>
           <div class="select-wrapper">
             <select id="languageSelect" class="language-dropdown">
-              <option value="en-IN" selected>English (India)</option>
-              <option value="en-US">English (United States)</option>
-              <option value="ta-IN">Tamil - தமிழ் (India)</option>
-              <option value="hi-IN">Hindi - हिन्दी (India)</option>
+              <optgroup label="Tamil (தமிழ்)">
+                <option value="ta-IN" selected>தமிழ் - இந்தியா / Tamil (India)</option>
+                <option value="ta-LK">தமிழ் - இலங்கை / Tamil (Sri Lanka)</option>
+                <option value="ta-SG">தமிழ் - சிங்கப்பூர் / Tamil (Singapore)</option>
+                <option value="ta-MY">தமிழ் - மலேசியா / Tamil (Malaysia)</option>
+              </optgroup>
+              <optgroup label="English">
+                <option value="en-IN">English (India)</option>
+                <option value="en-US">English (United States)</option>
+                <option value="en-GB">English (United Kingdom)</option>
+              </optgroup>
+              <optgroup label="Hindi">
+                <option value="hi-IN">हिन्दी - भारत / Hindi (India)</option>
+              </optgroup>
             </select>
             <svg class="select-chevron" viewBox="0 0 20 20" fill="currentColor">
               <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
@@ -100,6 +110,16 @@
     <main class="main-content">
       <!-- Microphone Hero Control Panel -->
       <section class="mic-hero-card" aria-label="Microphone Controls">
+        <!-- Quick Language Switcher Pills -->
+        <div class="quick-lang-bar" aria-label="Quick language selector">
+          <span class="quick-lang-title">Language:</span>
+          <button type="button" class="lang-pill active" data-lang="ta-IN" title="Tamil (India) - தமிழ்">🇮🇳 தமிழ் (இந்தியா)</button>
+          <button type="button" class="lang-pill" data-lang="ta-LK" title="Tamil (Sri Lanka) - தமிழ்">🇱🇰 தமிழ் (இலங்கை)</button>
+          <button type="button" class="lang-pill" data-lang="en-IN" title="English (India)">🇮🇳 English (IN)</button>
+          <button type="button" class="lang-pill" data-lang="en-US" title="English (US)">🇺🇸 English (US)</button>
+          <button type="button" class="lang-pill" data-lang="hi-IN" title="Hindi (India) - हिन्दी">🇮🇳 हिन्दी</button>
+        </div>
+
         <div class="mic-visualizer-container">
           <!-- Animated Pulsing Ripples (Active when listening) -->
           <div class="mic-ripple-ring ripple-1"></div>
@@ -274,14 +294,17 @@
           </div>
         </div>
 
-        <!-- Punctuation Helper Bar -->
+        <!-- Punctuation Helper Bar (Tamil & English) -->
         <div class="punctuation-bar" aria-label="Quick punctuation shortcuts">
           <span class="punctuation-hint">Quick Insert:</span>
-          <button class="punct-chip" data-punct="." title="Insert Period">. Period</button>
-          <button class="punct-chip" data-punct="," title="Insert Comma">, Comma</button>
-          <button class="punct-chip" data-punct="?" title="Insert Question Mark">? Question</button>
-          <button class="punct-chip" data-punct="!" title="Insert Exclamation">! Exclamation</button>
-          <button class="punct-chip" data-punct="&#10;&#10;" title="Insert New Paragraph">↵ New Line</button>
+          <button class="punct-chip" data-punct="." title="முற்றுப்புள்ளி / Period">. முற்றுப்புள்ளி</button>
+          <button class="punct-chip" data-punct="," title="காற்புள்ளி / Comma">, காற்புள்ளி</button>
+          <button class="punct-chip" data-punct="?" title="வினாக்குறி / Question Mark">? வினாக்குறி</button>
+          <button class="punct-chip" data-punct="!" title="வியப்புக்குறி / Exclamation">! வியப்புக்குறி</button>
+          <button class="punct-chip" data-punct="&#10;&#10;" title="புதிய பத்தி / New Paragraph">↵ புதிய பத்தி</button>
+          <button class="punct-chip punct-chip-word" data-punct=" மற்றும் " title="மற்றும் (and)">+ மற்றும்</button>
+          <button class="punct-chip punct-chip-word" data-punct=" ஆனால் " title="ஆனால் (but)">+ ஆனால்</button>
+          <button class="punct-chip punct-chip-word" data-punct=" எனவே " title="எனவே (therefore)">+ எனவே</button>
         </div>
 
         <!-- The Interactive Text Editor Surface -->
