@@ -1,7 +1,8 @@
 /**
  * VoiceScribe Pro - Continuous Voice-to-Text Application
- * Core Logic: Web Speech API with self-healing continuous listening,
- * duplicate prevention, multi-language support, and comprehensive UI state management.
+ * Core Logic: Web Speech API with mobile-compatible duplicate prevention,
+ * strict index finalization, separate interim & final transcript state machines,
+ * safe continuous automatic restarting, and multi-language support.
  */
 
 'use strict';
@@ -16,7 +17,7 @@
   // ---------------------------------------------------------------------------
   // 2. DOM Elements
   // ---------------------------------------------------------------------------
-  // Controls
+  // Microphone Controls
   const micHeroBtn = document.getElementById('micHeroBtn');
   const startBtn = document.getElementById('startBtn');
   const pauseBtn = document.getElementById('pauseBtn');
@@ -30,13 +31,13 @@
   const micStateMessage = document.getElementById('micStateMessage');
   const restartRecoveryStatus = document.getElementById('restartRecoveryStatus');
 
-  // Statistics
+  // Speech Statistics
   const wordCountEl = document.getElementById('wordCount');
   const charCountEl = document.getElementById('charCount');
   const elapsedTimeEl = document.getElementById('elapsedTime');
   const restartCountEl = document.getElementById('restartCount');
 
-  // Editor
+  // Editor Surface & Tools
   const textEditor = document.getElementById('textEditor');
   const interimBadge = document.getElementById('interimBadge');
   const interimTextPreview = document.getElementById('interimTextPreview');
@@ -64,42 +65,49 @@
 
   const toastContainer = document.getElementById('toastContainer');
   const punctuationChips = document.querySelectorAll('.punct-chip');
+  const langPills = document.querySelectorAll('.lang-pill');
 
   // ---------------------------------------------------------------------------
   // 3. Application State Variables
   // ---------------------------------------------------------------------------
+  // Native Recognition & State Control
   let recognition = null;
-  let isListening = false;
-  let isPaused = false;
-  let shouldAutoRestart = false; // Flag to control whether onend should automatically restart
-  let isRestarting = false;
-  let restartAttempts = 0;
+  let isRecognitionActive = false; // Indicates if native recognition instance is alive
+  let isListening = false;         // Indicates user intent to be actively listening
+  let isPaused = false;            // Indicates user clicked Pause
+  let isRestarting = false;        // Indicates transient restarting state
   let totalRestarts = 0;
   let restartTimeoutId = null;
 
+  // Transcript Buffers (Kept strictly separated to prevent mobile repetitions)
+  let finalTranscript = '';        // Cumulative committed finalized text
+  let interimTranscript = '';      // Temporary in-progress speech preview
+  let finalizedIndices = new Set();// Tracks event.results indices already finalized in current session
+
   // Language mapping
-  let currentLanguage = languageSelect ? languageSelect.value : 'en-IN';
+  let currentLanguage = languageSelect ? languageSelect.value : 'ta-IN';
 
   // Timer Variables
   let timerIntervalId = null;
   let timerStartTime = 0;
-  let accumulatedTime = 0; // in milliseconds
+  let accumulatedTime = 0;         // in milliseconds
 
   // Editor Font Size State
-  let currentFontSize = 16; // in px
+  let currentFontSize = 16;        // in px
 
-  // Consecutive error tracking (prevents rapid restart loops on permanent failures)
-  let consecutiveErrorCount = 0;
+  // Error streak guards
+  let consecutiveErrors = 0;
   const MAX_CONSECUTIVE_ERRORS = 4;
-  const RESTART_DELAY_MS = 300;
+  const RESTART_DELAY_MS = 350;    // Safe delay giving mobile Android audio HAL time to release
 
   // ---------------------------------------------------------------------------
   // 4. Initial Setup & Validation
   // ---------------------------------------------------------------------------
   function initializeApp() {
     setupEventListeners();
+    applyLanguage(currentLanguage, false);
     updateButtonStates('idle');
-    updateStats();
+    renderTranscripts();
 
     if (!isSpeechSupported) {
       showAlert(
@@ -113,12 +121,12 @@
       return;
     }
 
-    // Inform user if served via file:/// protocol instead of localhost/https
+    // Check if served directly via file:/// protocol
     if (window.location.protocol === 'file:') {
       showAlert(
         'warning',
         'Local File Protocol Detected',
-        'You are running this application directly via file:///. In Google Chrome, microphone permissions may be restricted unless served through localhost (e.g., VS Code Live Server) or HTTPS.'
+        'You are running this application directly via file:///. In Google Chrome and Android Chrome, microphone permissions may be restricted unless served through localhost (e.g. VS Code Live Server) or HTTPS.'
       );
     }
   }
@@ -136,16 +144,9 @@
       rec.maxAlternatives = 1;
       rec.lang = currentLanguage;
 
-      // Event: Speech Results (Final and Interim)
       rec.onresult = handleSpeechResult;
-
-      // Event: Recognition Started
       rec.onstart = handleRecognitionStart;
-
-      // Event: Recognition Ended (Session closed by browser or user)
       rec.onend = handleRecognitionEnd;
-
-      // Event: Recognition Errors
       rec.onerror = handleRecognitionError;
 
       return rec;
@@ -157,16 +158,148 @@
   }
 
   // ---------------------------------------------------------------------------
-  // 6. Speech Recognition Event Handlers
+  // 6. Speech Recognition Result Processing (Mobile-Optimized & Duplicate-Free)
   // ---------------------------------------------------------------------------
 
   /**
-   * Fired when the speech recognition engine successfully starts listening.
+   * Core result handler:
+   * - Eliminates Android Chrome duplicate bug where event.resultIndex is stuck at 0.
+   * - Uses finalizedIndices Set to ensure each result index is committed at most once.
+   * - Rebuilds interimTranscript from scratch each event so interim words never multiply.
    */
+  function handleSpeechResult(event) {
+    let newlyFinalizedText = '';
+    interimTranscript = '';
+
+    // Inspect all results provided in this event
+    for (let i = 0; i < event.results.length; ++i) {
+      const result = event.results[i];
+      const transcript = result[0].transcript;
+
+      if (result.isFinal) {
+        // Guard against duplicate processing of already finalized indices
+        if (!finalizedIndices.has(i)) {
+          finalizedIndices.add(i);
+          const cleanTranscript = transcript.trim();
+          if (cleanTranscript.length > 0) {
+            newlyFinalizedText += (newlyFinalizedText ? ' ' : '') + cleanTranscript;
+          }
+        }
+      } else {
+        // Collect current in-progress non-final phrases
+        interimTranscript += transcript;
+      }
+    }
+
+    // Commit newly finalized segments to cumulative finalTranscript
+    if (newlyFinalizedText.trim().length > 0) {
+      appendFinalTranscript(newlyFinalizedText.trim());
+    }
+
+    // Render both final and interim to UI
+    renderTranscripts();
+  }
+
+  /**
+   * Safely appends newly finalized text to finalTranscript with intelligent
+   * spacing and punctuation capitalization without repeating previous text.
+   */
+  function appendFinalTranscript(newText) {
+    if (!newText) return;
+
+    if (!finalTranscript || finalTranscript.trim().length === 0) {
+      finalTranscript = formatSentenceStart(newText);
+    } else {
+      let separator = ' ';
+      if (finalTranscript.endsWith('\n') || finalTranscript.endsWith(' ')) {
+        separator = '';
+      }
+
+      // If previous text ended with sentence-terminating punctuation (. ? !), capitalize start
+      const trimmedFinal = finalTranscript.trim();
+      if (/[.!?]$/.test(trimmedFinal)) {
+        newText = formatSentenceStart(newText);
+      }
+
+      finalTranscript = finalTranscript + separator + newText;
+    }
+  }
+
+  /**
+   * Capitalizes first character for Latin languages (leaves Tamil/Hindi unchanged).
+   */
+  function formatSentenceStart(text) {
+    if (!text) return '';
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  }
+
+  /**
+   * Renders finalized and interim transcripts to the editor and floating badge.
+   * Interim text is shown with distinct styling and is never committed to finalTranscript
+   * until the browser flags it as isFinal.
+   */
+  function renderTranscripts() {
+    const trimmedFinal = finalTranscript;
+    const trimmedInterim = interimTranscript.trim();
+
+    if (trimmedInterim.length > 0) {
+      let separator = '';
+      if (trimmedFinal.length > 0 && !trimmedFinal.endsWith(' ') && !trimmedFinal.endsWith('\n')) {
+        separator = ' ';
+      }
+
+      // Display final text followed by highlighted interim preview in the editor
+      textEditor.innerHTML = escapeHtml(trimmedFinal) + separator +
+        '<span class="editor-interim" style="color: var(--teal-600); font-style: italic; opacity: 0.88;">' +
+        escapeHtml(trimmedInterim) + '</span>';
+
+      showInterimBadge(trimmedInterim);
+    } else {
+      if (trimmedFinal.length > 0) {
+        textEditor.innerText = trimmedFinal;
+      } else {
+        textEditor.innerHTML = ''; // Empty allows CSS :empty placeholder to display cleanly
+      }
+      hideInterimBadge();
+    }
+
+    // Auto-scroll to ensure latest spoken text is visible
+    textEditor.scrollTop = textEditor.scrollHeight;
+
+    // Update real-time word and character counters
+    updateStats();
+  }
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;')
+      .replace(/\n/g, '<br>');
+  }
+
+  function showInterimBadge(interimText) {
+    interimTextPreview.textContent = interimText;
+    interimBadge.style.display = 'flex';
+  }
+
+  function hideInterimBadge() {
+    interimBadge.style.display = 'none';
+    interimTextPreview.textContent = '';
+  }
+
+  // ---------------------------------------------------------------------------
+  // 7. Recognition Session Lifecycle & Auto-Restart Logic
+  // ---------------------------------------------------------------------------
+
   function handleRecognitionStart() {
-    isListening = true;
+    isRecognitionActive = true;
     isRestarting = false;
-    consecutiveErrorCount = 0; // Reset error streak on successful start
+    consecutiveErrors = 0;
+    finalizedIndices.clear(); // Clear indices for this new recognition session
 
     document.body.classList.add('is-listening');
     updateStatusBadge('listening', 'Listening');
@@ -174,104 +307,30 @@
     startListeningTimer();
 
     const langName = getLanguageDisplayName(currentLanguage);
-    micStateMessage.innerHTML = `Microphone is active in <strong>${langName}</strong>. Speak clearly...`;
-    hideInterimBadge();
+    micStateMessage.innerHTML = currentLanguage.startsWith('ta')
+      ? `மைக் இயக்கத்தில் உள்ளது: <strong>${langName}</strong>. தெளிவாகப் பேசுங்கள்...`
+      : `Microphone is active in <strong>${langName}</strong>. Speak clearly...`;
   }
 
   /**
-   * Processes speech recognition results with duplicate prevention and live interim previews.
-   */
-  function handleSpeechResult(event) {
-    let finalSentence = '';
-    let interimSentence = '';
-
-    // Loop through the results starting from event.resultIndex
-    // This is crucial: processing only new items prevents re-appending already committed phrases.
-    for (let i = event.resultIndex; i < event.results.length; ++i) {
-      const result = event.results[i];
-      const transcript = result[0].transcript;
-
-      if (result.isFinal) {
-        finalSentence += transcript;
-      } else {
-        interimSentence += transcript;
-      }
-    }
-
-    // 1. Process Finalized Text
-    if (finalSentence.trim().length > 0) {
-      commitFinalTranscript(finalSentence);
-      hideInterimBadge();
-    }
-
-    // 2. Process Interim (In-Progress) Text
-    if (interimSentence.trim().length > 0) {
-      showInterimBadge(interimSentence);
-    } else if (finalSentence.trim().length > 0) {
-      hideInterimBadge();
-    }
-
-    updateStats();
-  }
-
-  /**
-   * Safely appends finalized speech to the editor while preserving existing text
-   * and formatting spacing smoothly.
-   */
-  function commitFinalTranscript(text) {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-
-    // Get current raw editor content
-    const currentText = textEditor.innerText;
-
-    // Check if we need leading whitespace
-    let separator = ' ';
-    if (currentText.length === 0 || currentText.endsWith('\n') || currentText.endsWith(' ')) {
-      separator = '';
-    }
-
-    // Capitalize first letter if it's the start of text or follows terminal punctuation (. ? !)
-    let formattedText = trimmed;
-    if (currentText.length === 0 || /[.!?]\s*$/.test(currentText)) {
-      formattedText = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
-    }
-
-    // Append to contenteditable without destroying focus or selection
-    if (currentText.length === 0) {
-      textEditor.innerText = formattedText;
-    } else {
-      textEditor.innerText = currentText + separator + formattedText;
-    }
-
-    // Scroll editor to bottom so user always sees newest words
-    textEditor.scrollTop = textEditor.scrollHeight;
-  }
-
-  /**
-   * Displays the temporary interim transcript in the floating indicator.
-   */
-  function showInterimBadge(interimText) {
-    interimTextPreview.textContent = interimText;
-    interimBadge.style.display = 'flex';
-  }
-
-  /**
-   * Hides the interim preview badge when speech is finalized or stopped.
-   */
-  function hideInterimBadge() {
-    interimBadge.style.display = 'none';
-    interimTextPreview.textContent = '';
-  }
-
-  /**
-   * Fired when the speech recognition session ends.
-   * Handles safe, automatic restarting if the user still wants listening active.
+   * Fired when recognition session ends (silence timeout, browser reset, or user stop).
    */
   function handleRecognitionEnd() {
-    hideInterimBadge();
+    isRecognitionActive = false;
 
-    // Case 1: User explicitly paused the microphone
+    // On mobile Android Chrome, if session ended abruptly with uncommitted interim text,
+    // safely commit it so the last spoken sentence is never lost.
+    if (interimTranscript.trim().length > 0) {
+      appendFinalTranscript(interimTranscript.trim());
+      interimTranscript = '';
+      renderTranscripts();
+    } else {
+      hideInterimBadge();
+    }
+
+    finalizedIndices.clear();
+
+    // Case 1: User explicitly paused
     if (isPaused) {
       document.body.classList.remove('is-listening');
       updateStatusBadge('paused', 'Paused');
@@ -281,9 +340,8 @@
       return;
     }
 
-    // Case 2: User explicitly clicked Stop or disabled continuous mode
-    if (!shouldAutoRestart) {
-      isListening = false;
+    // Case 2: User explicitly stopped listening
+    if (!isListening) {
       document.body.classList.remove('is-listening');
       updateStatusBadge('idle', 'Stopped');
       updateButtonStates('idle');
@@ -292,19 +350,16 @@
       return;
     }
 
-    // Case 3: Recognition stopped unexpectedly (silence cutoff, browser timeout, temporary network glitch)
-    // Execute safe, automatic restart!
-    handleAutoRestart();
+    // Case 3: Session ended unexpectedly while user wants active listening -> Auto-restart!
+    scheduleAutoRestart();
   }
 
   /**
-   * Executes safe automatic restart with delay and loop prevention.
+   * Schedules a safe, non-overlapping restart with backoff to accommodate mobile audio drivers.
    */
-  function handleAutoRestart() {
-    // If consecutive errors are too high, halt restart loop to protect browser
-    if (consecutiveErrorCount >= MAX_CONSECUTIVE_ERRORS) {
+  function scheduleAutoRestart() {
+    if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
       console.warn('Exceeded maximum consecutive recognition errors. Halting auto-restart.');
-      shouldAutoRestart = false;
       isListening = false;
       document.body.classList.remove('is-listening');
       updateStatusBadge('error', 'Error');
@@ -321,83 +376,99 @@
     updateStatusBadge('restarting', 'Restarting...');
     micStateMessage.innerHTML = 'Restoring speech connection... Keep speaking.';
 
-    // Clear any previous restart timeout
     if (restartTimeoutId) clearTimeout(restartTimeoutId);
 
     restartTimeoutId = setTimeout(() => {
-      if (!shouldAutoRestart || isPaused) return;
-
-      try {
-        if (recognition) {
-          recognition.abort(); // Clear prior native instance cleanly
-        }
-        recognition = createRecognitionInstance();
-        if (recognition) {
-          recognition.start();
-        }
-      } catch (err) {
-        console.error('Error during auto-restart:', err);
-        consecutiveErrorCount++;
-        // Retry once more with a longer delay if needed
-        if (shouldAutoRestart && consecutiveErrorCount < MAX_CONSECUTIVE_ERRORS) {
-          handleAutoRestart();
-        }
-      }
+      if (!isListening || isPaused) return;
+      startRecognitionSession();
     }, RESTART_DELAY_MS);
   }
 
   /**
-   * Fired when an error occurs in the recognition engine.
+   * Initiates a single, clean recognition instance, ensuring prior instances are fully torn down.
+   */
+  function startRecognitionSession() {
+    if (!isSpeechSupported) return;
+    if (!isListening || isPaused) return;
+
+    // Safely tear down existing instance to prevent overlapping sessions
+    if (recognition) {
+      try {
+        recognition.onresult = null;
+        recognition.onend = null;
+        recognition.onerror = null;
+        recognition.onstart = null;
+        recognition.abort();
+      } catch (e) {
+        console.warn('Error during instance cleanup:', e);
+      }
+      recognition = null;
+      isRecognitionActive = false;
+    }
+
+    finalizedIndices.clear();
+    recognition = createRecognitionInstance();
+    if (!recognition) return;
+
+    try {
+      recognition.start();
+    } catch (err) {
+      console.warn('Recognition start exception, retrying safely:', err);
+      isRecognitionActive = false;
+      consecutiveErrors++;
+      if (isListening && !isPaused && consecutiveErrors < MAX_CONSECUTIVE_ERRORS) {
+        scheduleAutoRestart();
+      }
+    }
+  }
+
+  /**
+   * Error handler for speech recognition.
    */
   function handleRecognitionError(event) {
     const error = event.error;
-    console.warn('Speech Recognition Event Error:', error);
+    console.warn('Speech Recognition Error:', error);
 
-    // Error: no-speech
-    // Normal occurrence when user remains silent. Chrome closes session and fires onend.
-    // We let onend trigger the smooth auto-restart without showing an alarming error banner!
+    // 'no-speech': Standard silence event in Web Speech API. onend will handle smooth recovery.
     if (error === 'no-speech') {
       micStateMessage.innerHTML = 'Waiting for speech input...';
       return;
     }
 
-    // Error: aborted
-    // Normal occurrence when .stop() or .abort() is explicitly invoked by code.
+    // 'aborted': Occurs when abort() is explicitly invoked.
     if (error === 'aborted') {
       return;
     }
 
-    // Fatal Error: Microphone permission denied or blocked
+    // Fatal: Permission denied
     if (error === 'not-allowed' || error === 'service-not-allowed') {
-      shouldAutoRestart = false;
       isListening = false;
       isPaused = false;
-      consecutiveErrorCount = MAX_CONSECUTIVE_ERRORS;
+      consecutiveErrors = MAX_CONSECUTIVE_ERRORS;
 
       showAlert(
         'error',
         'Microphone Access Denied',
-        'Microphone permission was denied by the browser or system. Please click the lock or camera/mic icon in your browser address bar, set Microphone to "Allow", and refresh or click Start.'
+        'Microphone permission was denied by the browser or operating system. Please allow microphone access in your browser address bar settings and click Start.'
       );
 
       document.body.classList.remove('is-listening');
       updateStatusBadge('error', 'Permission Denied');
       updateButtonStates('idle');
       stopListeningTimer();
-      micStateMessage.innerHTML = '<span style="color: var(--rose-600); font-weight: 700;">Microphone permission denied.</span> Please grant microphone access in browser settings.';
+      micStateMessage.innerHTML = '<span style="color: var(--rose-600); font-weight: 700;">Microphone permission denied.</span> Please grant microphone access.';
       return;
     }
 
-    // Fatal Error: Audio capture device missing
+    // Fatal: Audio capture hardware missing
     if (error === 'audio-capture') {
-      shouldAutoRestart = false;
       isListening = false;
-      consecutiveErrorCount = MAX_CONSECUTIVE_ERRORS;
+      consecutiveErrors = MAX_CONSECUTIVE_ERRORS;
 
       showAlert(
         'error',
         'No Microphone Found',
-        'No audio recording device was detected. Please connect a working microphone or headset to your computer and try again.'
+        'No audio recording device was detected. Please connect a working microphone or headset and try again.'
       );
 
       document.body.classList.remove('is-listening');
@@ -408,121 +479,104 @@
       return;
     }
 
-    // Network error: Chrome connects to Google speech servers
+    // Network error: Chrome connects to Google cloud speech servers
     if (error === 'network') {
-      consecutiveErrorCount++;
+      consecutiveErrors++;
       showToast('Network issue connecting to Google speech services. Retrying...', 'warning');
       micStateMessage.innerHTML = 'Network issue connecting to speech recognition server. Retrying...';
       return;
     }
 
-    // Other unexpected errors
-    consecutiveErrorCount++;
+    consecutiveErrors++;
     showToast(`Speech recognition issue: ${error}`, 'info');
   }
 
   // ---------------------------------------------------------------------------
-  // 7. Microphone Control Actions
+  // 8. User Control Actions: Start, Pause, Resume, Stop
   // ---------------------------------------------------------------------------
 
-  /**
-   * Starts continuous voice recognition session.
-   */
   function startListening() {
     if (!isSpeechSupported) return;
 
-    // Reset error streak and flags
-    consecutiveErrorCount = 0;
-    shouldAutoRestart = true;
+    consecutiveErrors = 0;
+    isListening = true;
     isPaused = false;
 
-    // Create fresh instance if not exists
-    if (!recognition) {
-      recognition = createRecognitionInstance();
-    }
-
-    try {
-      recognition.lang = currentLanguage;
-      recognition.start();
-      showToast(`Started listening in ${getLanguageDisplayName(currentLanguage)}`, 'info');
-    } catch (err) {
-      // If already started or aborting, recreate and start
-      console.warn('Recognition start exception, recreating instance...', err);
-      try {
-        recognition.abort();
-        recognition = createRecognitionInstance();
-        recognition.start();
-      } catch (innerErr) {
-        console.error('Fatal start error:', innerErr);
-        showAlert('error', 'Start Error', 'Unable to start speech recognition: ' + innerErr.message);
-      }
-    }
+    startRecognitionSession();
+    showToast(`Started listening in ${getLanguageDisplayName(currentLanguage)}`, 'info');
   }
 
-  /**
-   * Pauses continuous voice recognition session without losing transcribed content or timer.
-   */
   function pauseListening() {
-    if (!isListening && !isRestarting) return;
+    if (!isListening) return;
 
     isPaused = true;
-    shouldAutoRestart = false; // Do not auto-restart while paused
-    if (restartTimeoutId) clearTimeout(restartTimeoutId);
+
+    if (restartTimeoutId) {
+      clearTimeout(restartTimeoutId);
+      restartTimeoutId = null;
+    }
+
+    // Commit any in-progress interim text so it is not lost while paused
+    if (interimTranscript.trim().length > 0) {
+      appendFinalTranscript(interimTranscript.trim());
+      interimTranscript = '';
+      renderTranscripts();
+    }
 
     if (recognition) {
       try {
         recognition.stop();
       } catch (e) {
-        console.warn('Error stopping on pause:', e);
+        try { recognition.abort(); } catch (e2) {}
       }
     }
+    isRecognitionActive = false;
 
+    document.body.classList.remove('is-listening');
+    updateStatusBadge('paused', 'Paused');
+    updateButtonStates('paused');
+    pauseListeningTimer();
+    hideInterimBadge();
+    micStateMessage.innerHTML = 'Microphone is paused. Click <strong>Resume</strong> or the Mic button to continue.';
     showToast('Voice dictation paused', 'info');
   }
 
-  /**
-   * Resumes listening after being paused.
-   */
   function resumeListening() {
     if (!isPaused) return;
 
     isPaused = false;
-    shouldAutoRestart = true;
-    consecutiveErrorCount = 0;
+    isListening = true;
+    consecutiveErrors = 0;
 
-    if (!recognition) {
-      recognition = createRecognitionInstance();
-    }
-
-    try {
-      recognition.lang = currentLanguage;
-      recognition.start();
-      showToast('Voice dictation resumed', 'info');
-    } catch (err) {
-      console.warn('Resume error, resetting instance:', err);
-      recognition = createRecognitionInstance();
-      recognition.start();
-    }
+    startRecognitionSession();
+    showToast('Voice dictation resumed', 'info');
   }
 
-  /**
-   * Stops continuous voice recognition session completely and halts auto-restart.
-   */
   function stopListening() {
-    shouldAutoRestart = false; // Prevents onend from restarting
-    isPaused = false;
     isListening = false;
+    isPaused = false;
     isRestarting = false;
 
-    if (restartTimeoutId) clearTimeout(restartTimeoutId);
+    if (restartTimeoutId) {
+      clearTimeout(restartTimeoutId);
+      restartTimeoutId = null;
+    }
+
+    // Commit any leftover interim speech before shutting down
+    if (interimTranscript.trim().length > 0) {
+      appendFinalTranscript(interimTranscript.trim());
+      interimTranscript = '';
+      renderTranscripts();
+    }
 
     if (recognition) {
       try {
         recognition.stop();
       } catch (e) {
-        console.warn('Error on explicit stop:', e);
+        try { recognition.abort(); } catch (e2) {}
       }
     }
+    isRecognitionActive = false;
 
     document.body.classList.remove('is-listening');
     updateStatusBadge('idle', 'Stopped');
@@ -533,11 +587,8 @@
     showToast('Voice recognition stopped', 'info');
   }
 
-  /**
-   * Toggles between Start and Stop when clicking the central hero mic button.
-   */
   function toggleMicHero() {
-    if (isListening || isRestarting) {
+    if (isListening && !isPaused) {
       stopListening();
     } else if (isPaused) {
       resumeListening();
@@ -547,65 +598,111 @@
   }
 
   // ---------------------------------------------------------------------------
-  // 8. Language Management
+  // 9. Language Management & Localization
   // ---------------------------------------------------------------------------
-  function handleLanguageChange(event) {
-    const newLang = event.target.value;
-    const oldLang = currentLanguage;
+
+  function applyLanguage(newLang, notify = true) {
     currentLanguage = newLang;
 
-    showToast(`Language set to ${getLanguageDisplayName(newLang)}`, 'info');
+    // Synchronize select dropdown
+    if (languageSelect && languageSelect.value !== newLang) {
+      languageSelect.value = newLang;
+    }
+
+    // Synchronize quick select pill active states
+    if (langPills) {
+      langPills.forEach(pill => {
+        if (pill.getAttribute('data-lang') === newLang) {
+          pill.classList.add('active');
+        } else {
+          pill.classList.remove('active');
+        }
+      });
+    }
+
+    // Update dynamic editor placeholder
+    if (newLang.startsWith('ta')) {
+      textEditor.setAttribute('data-placeholder', "உங்கள் குரல் தமிழில் உடனுக்குடன் இங்கே எழுதப்படும்... 'Start Listening' அல்லது மைக் பொத்தானை அழுத்தவும்...");
+    } else if (newLang.startsWith('hi')) {
+      textEditor.setAttribute('data-placeholder', "आपके बोले गए शब्द यहां वास्तविक समय में दिखाई देंगे... 'Start Listening' पर क्लिक करें...");
+    } else {
+      textEditor.setAttribute('data-placeholder', "Your spoken words will appear here continuously in real time. Click 'Start Listening' and speak into your microphone...");
+    }
+
+    const langName = getLanguageDisplayName(newLang);
+
+    if (notify) {
+      showToast(`Language set to ${langName}`, 'info');
+    }
 
     // If currently listening, seamlessly switch language by restarting the session
     if (isListening && !isPaused) {
-      try {
-        shouldAutoRestart = true;
-        if (recognition) {
-          recognition.abort();
-        }
-        recognition = createRecognitionInstance();
-        recognition.lang = currentLanguage;
-        recognition.start();
-      } catch (err) {
-        console.error('Error switching language on the fly:', err);
-      }
-    } else if (recognition) {
-      recognition.lang = currentLanguage;
+      micStateMessage.innerHTML = newLang.startsWith('ta')
+        ? `மைக் இயக்கத்தில் உள்ளது: <strong>${langName}</strong>. தெளிவாகப் பேசுங்கள்...`
+        : `Microphone is active in <strong>${langName}</strong>. Speak clearly...`;
+
+      startRecognitionSession();
     }
+  }
+
+  function handleLanguageChange(event) {
+    applyLanguage(event.target.value, true);
   }
 
   function getLanguageDisplayName(code) {
     switch (code) {
+      case 'ta-IN': return 'தமிழ் - இந்தியா / Tamil (India)';
+      case 'ta-LK': return 'தமிழ் - இலங்கை / Tamil (Sri Lanka)';
+      case 'ta-SG': return 'தமிழ் - சிங்கப்பூர் / Tamil (Singapore)';
+      case 'ta-MY': return 'தமிழ் - மலேசியா / Tamil (Malaysia)';
       case 'en-IN': return 'English (India)';
       case 'en-US': return 'English (US)';
-      case 'ta-IN': return 'Tamil (தமிழ்)';
-      case 'hi-IN': return 'Hindi (हिन्दी)';
+      case 'en-GB': return 'English (UK)';
+      case 'hi-IN': return 'हिन्दी - भारत / Hindi (India)';
       default: return code;
     }
   }
 
   // ---------------------------------------------------------------------------
-  // 9. Editor Operations: Copy, Download, Clear, Punctuation & Font Size
+  // 10. Editor Actions: Manual Typing Sync, Copy, Download, Clear, Punctuation
   // ---------------------------------------------------------------------------
 
   /**
-   * Copies transcribed text to clipboard with modern API and reliable fallback.
+   * Synchronizes manual user typing in the editor into finalTranscript,
+   * cleanly stripping out any active interim preview span so interim speech
+   * doesn't get baked into finalTranscript prematurely.
    */
-  async function copyTextToClipboard() {
-    const text = textEditor.innerText.trim();
+  function syncEditorManualEdits() {
+    const clone = textEditor.cloneNode(true);
+    const interimSpan = clone.querySelector('.editor-interim');
+    if (interimSpan) {
+      interimSpan.remove();
+    }
+    finalTranscript = clone.innerText;
 
-    if (!text) {
+    if (!finalTranscript.trim()) {
+      finalTranscript = '';
+      if (!interimTranscript.trim()) {
+        textEditor.innerHTML = '';
+      }
+    }
+    updateStats();
+  }
+
+  async function copyTextToClipboard() {
+    const textToCopy = (finalTranscript + (interimTranscript ? ' ' + interimTranscript : '')).trim();
+
+    if (!textToCopy) {
       showToast('Editor is empty. Nothing to copy!', 'warning');
       return;
     }
 
     try {
       if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
+        await navigator.clipboard.writeText(textToCopy);
       } else {
-        // Fallback for non-secure origins
         const textarea = document.createElement('textarea');
-        textarea.value = text;
+        textarea.value = textToCopy;
         textarea.style.position = 'fixed';
         textarea.style.left = '-9999px';
         document.body.appendChild(textarea);
@@ -620,13 +717,10 @@
     }
   }
 
-  /**
-   * Downloads transcribed text as a formatted .txt file.
-   */
   function downloadTextFile() {
-    const text = textEditor.innerText.trim();
+    const textToExport = (finalTranscript + (interimTranscript ? ' ' + interimTranscript : '')).trim();
 
-    if (!text) {
+    if (!textToExport) {
       showToast('Editor is empty. Nothing to download!', 'warning');
       return;
     }
@@ -636,7 +730,7 @@
     const timeStamp = now.toTimeString().slice(0, 5).replace(':', '-');
     const fileName = `VoiceScribe_Transcript_${dateStamp}_${timeStamp}.txt`;
 
-    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const blob = new Blob([textToExport], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -649,12 +743,9 @@
     showToast(`Downloaded as "${fileName}"`, 'success');
   }
 
-  /**
-   * Opens the confirmation dialog before wiping editor content.
-   */
   function promptClearText() {
-    const text = textEditor.innerText.trim();
-    if (!text) {
+    const currentTotal = (finalTranscript + (interimTranscript ? ' ' + interimTranscript : '')).trim();
+    if (!currentTotal) {
       showToast('Editor is already empty!', 'info');
       return;
     }
@@ -662,6 +753,9 @@
   }
 
   function confirmClearText() {
+    finalTranscript = '';
+    interimTranscript = '';
+    finalizedIndices.clear();
     textEditor.innerHTML = '';
     hideInterimBadge();
     updateStats();
@@ -673,29 +767,26 @@
     clearConfirmModal.style.display = 'none';
   }
 
-  /**
-   * Quick-inserts punctuation chips into the editor.
-   */
   function handlePunctuationInsert(punct) {
-    const currentText = textEditor.innerText;
-    let separator = '';
+    if (!punct) return;
 
-    if (punct === '.' || punct === ',' || punct === '?' || punct === '!') {
-      // Remove trailing whitespace before punctuation if any
-      textEditor.innerText = currentText.replace(/\s+$/, '') + punct + ' ';
-    } else {
-      // New line / paragraph
-      textEditor.innerText = currentText + punct;
+    // If there was any pending interim, commit it first
+    if (interimTranscript.trim().length > 0) {
+      appendFinalTranscript(interimTranscript.trim());
+      interimTranscript = '';
     }
 
-    textEditor.scrollTop = textEditor.scrollHeight;
-    updateStats();
+    if (punct === '.' || punct === ',' || punct === '?' || punct === '!') {
+      finalTranscript = finalTranscript.replace(/\s+$/, '') + punct + ' ';
+    } else {
+      // New paragraph or connector word
+      finalTranscript = finalTranscript + punct;
+    }
+
+    renderTranscripts();
     textEditor.focus();
   }
 
-  /**
-   * Font size adjustments for the text editor.
-   */
   function changeFontSize(delta) {
     currentFontSize = Math.min(28, Math.max(13, currentFontSize + delta));
     textEditor.style.fontSize = `${currentFontSize}px`;
@@ -709,28 +800,26 @@
   }
 
   // ---------------------------------------------------------------------------
-  // 10. Word & Character Counter
+  // 11. Word & Character Counter
   // ---------------------------------------------------------------------------
   function updateStats() {
-    const text = textEditor.innerText.trim();
+    const totalText = (finalTranscript + (interimTranscript ? ' ' + interimTranscript : '')).trim();
 
-    // Characters count
-    charCountEl.textContent = text.length;
+    charCountEl.textContent = totalText.length;
 
-    // Word count calculation (handles multiline, spaces, tabs, and Indic languages)
-    if (text.length === 0) {
+    if (totalText.length === 0) {
       wordCountEl.textContent = '0';
     } else {
-      const words = text.split(/\s+/).filter(word => word.length > 0);
+      const words = totalText.split(/\s+/).filter(word => word.length > 0);
       wordCountEl.textContent = words.length;
     }
   }
 
   // ---------------------------------------------------------------------------
-  // 11. Timer Implementation (Accuracy via Performance/Date)
+  // 12. Listening Timer
   // ---------------------------------------------------------------------------
   function startListeningTimer() {
-    if (timerIntervalId) return; // Already running
+    if (timerIntervalId) return;
 
     timerStartTime = Date.now();
     timerIntervalId = setInterval(() => {
@@ -757,15 +846,6 @@
     renderElapsedTime(accumulatedTime);
   }
 
-  function resetTimer() {
-    if (timerIntervalId) {
-      clearInterval(timerIntervalId);
-      timerIntervalId = null;
-    }
-    accumulatedTime = 0;
-    renderElapsedTime(0);
-  }
-
   function renderElapsedTime(ms) {
     const totalSeconds = Math.floor(ms / 1000);
     const hours = Math.floor(totalSeconds / 3600);
@@ -782,12 +862,8 @@
   }
 
   // ---------------------------------------------------------------------------
-  // 12. UI State & Status Helpers
+  // 13. UI State & Status Helpers
   // ---------------------------------------------------------------------------
-
-  /**
-   * Updates status badge appearance (Idle, Listening, Paused, Restarting, Error).
-   */
   function updateStatusBadge(statusClass, labelText) {
     statusIndicator.className = 'status-indicator status-' + statusClass;
     statusLabel.textContent = labelText;
@@ -802,14 +878,11 @@
       restartRecoveryStatus.textContent = 'Paused';
       restartRecoveryStatus.style.color = 'var(--amber-600)';
     } else {
-      restartRecoveryStatus.textContent = shouldAutoRestart ? 'Active' : 'Standby';
+      restartRecoveryStatus.textContent = isListening ? 'Active' : 'Standby';
       restartRecoveryStatus.style.color = 'var(--slate-600)';
     }
   }
 
-  /**
-   * Manages enabled/disabled states of Start, Pause, Resume, and Stop buttons.
-   */
   function updateButtonStates(state) {
     if (!isSpeechSupported) {
       disableAllControls();
@@ -829,7 +902,6 @@
       stopBtn.disabled = false;
       micHeroBtn.setAttribute('title', 'Click to Resume Listening');
     } else {
-      // idle or stopped
       startBtn.disabled = false;
       pauseBtn.disabled = true;
       resumeBtn.disabled = true;
@@ -846,9 +918,6 @@
     micHeroBtn.disabled = true;
   }
 
-  // ---------------------------------------------------------------------------
-  // 13. Toasts & Alert Banners
-  // ---------------------------------------------------------------------------
   function showToast(message, type = 'info') {
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
@@ -888,24 +957,24 @@
     // Language dropdown
     languageSelect.addEventListener('change', handleLanguageChange);
 
-    // Editor live typing & paste sync for word/char counting
-    textEditor.addEventListener('input', () => {
-      if (!textEditor.innerText.trim()) {
-        textEditor.innerHTML = '';
-      }
-      updateStats();
-    });
-    textEditor.addEventListener('keyup', updateStats);
+    // Quick language pill selector buttons
+    if (langPills) {
+      langPills.forEach((pill) => {
+        pill.addEventListener('click', () => {
+          const lang = pill.getAttribute('data-lang');
+          applyLanguage(lang, true);
+        });
+      });
+    }
+
+    // Editor manual typing & paste synchronization
+    textEditor.addEventListener('input', syncEditorManualEdits);
+    textEditor.addEventListener('keyup', syncEditorManualEdits);
     textEditor.addEventListener('paste', () => {
-      setTimeout(() => {
-        if (!textEditor.innerText.trim()) {
-          textEditor.innerHTML = '';
-        }
-        updateStats();
-      }, 10);
+      setTimeout(syncEditorManualEdits, 10);
     });
 
-    // Editor actions
+    // Editor toolbar actions
     copyBtn.addEventListener('click', copyTextToClipboard);
     downloadBtn.addEventListener('click', downloadTextFile);
     clearBtn.addEventListener('click', promptClearText);
@@ -917,12 +986,12 @@
       if (e.target === clearConfirmModal) cancelClearText();
     });
 
-    // Font sizing
+    // Font size controls
     fontSizeIncBtn.addEventListener('click', () => changeFontSize(2));
     fontSizeDecBtn.addEventListener('click', () => changeFontSize(-2));
     fontSizeResetBtn.addEventListener('click', resetFontSize);
 
-    // Punctuation helper chips
+    // Quick punctuation & connector chips
     punctuationChips.forEach((chip) => {
       chip.addEventListener('click', () => {
         const punct = chip.getAttribute('data-punct');
@@ -955,9 +1024,9 @@
       }
     });
 
-    // Warn user before leaving page if speech content exists
+    // Warn user before leaving page if significant content exists
     window.addEventListener('beforeunload', (e) => {
-      if (textEditor.innerText.trim().length > 10) {
+      if (finalTranscript.trim().length > 10) {
         e.preventDefault();
         e.returnValue = '';
       }
