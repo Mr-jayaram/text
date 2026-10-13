@@ -49,8 +49,8 @@
   --rose-500: #f43f5e;
   --rose-600: #e11d48;
 
-  /* Typography */
-  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans Devanagari', 'Noto Sans Tamil', sans-serif;
+  /* Typography - Prioritize Tamil Fonts for crisp Indic glyphs */
+  --font-sans: 'Plus Jakarta Sans', 'Noto Sans Tamil', 'Mukta Malar', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans Devanagari', sans-serif;
   --font-mono: 'JetBrains Mono', Consolas, Monaco, monospace;
 
   /* Geometry & Shadows */
@@ -497,6 +497,71 @@ body {
   right: 0;
   height: 4px;
   background: linear-gradient(90deg, var(--primary-600) 0%, var(--teal-500) 100%);
+}
+
+/* Quick Language Selector Bar */
+.quick-lang-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+  padding: 6px 14px;
+  background-color: var(--slate-100);
+  border: 1px solid var(--slate-200);
+  border-radius: var(--radius-full);
+  z-index: 2;
+}
+
+.quick-lang-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--slate-500);
+  margin-right: 4px;
+}
+
+.lang-pill {
+  background-color: #ffffff;
+  border: 1px solid var(--slate-200);
+  border-radius: var(--radius-full);
+  padding: 5px 12px;
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--slate-700);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.lang-pill:hover {
+  background-color: var(--primary-50);
+  border-color: var(--primary-300);
+  color: var(--primary-700);
+  transform: translateY(-1px);
+}
+
+.lang-pill.active {
+  background: linear-gradient(135deg, var(--teal-600) 0%, var(--primary-600) 100%);
+  color: #ffffff;
+  border-color: transparent;
+  box-shadow: 0 3px 8px rgba(13, 148, 136, 0.35);
+}
+
+.punct-chip-word {
+  background-color: var(--teal-50);
+  border-color: var(--teal-200);
+  color: var(--teal-700);
+  font-weight: 700;
+}
+
+.punct-chip-word:hover {
+  background-color: var(--teal-100);
+  border-color: var(--teal-400);
+  color: var(--teal-800);
 }
 
 .mic-visualizer-container {
