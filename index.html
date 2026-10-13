@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VoiceScribe - Continuous Voice-to-Text Dictation</title>
+  <meta name="description" content="A professional, continuous voice-to-text web application powered by the Web Speech API with automatic session restart, multi-language support, and live speech transcription.">
+
+  <!-- Google Fonts: Plus Jakarta Sans for UI + Noto Sans for Indic Scripts -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22%230284c7%22><path d=%22M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z%22/><path d=%22M19 10v2a7 7 0 0 1-14 0v-2%22 fill=%22none%22 stroke=%22%230284c7%22 stroke-width=%222%22/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Noto+Sans+Devanagari:wght@400;600&family=Noto+Sans+Tamil:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Background Ambient Glow Accents -->
+  <div class="bg-glow bg-glow-blue" aria-hidden="true"></div>
+  <div class="bg-glow bg-glow-teal" aria-hidden="true"></div>
+
+  <!-- Browser Support / Permissions Alert Banner (Hidden by default) -->
+  <div id="alertBanner" class="alert-banner" role="alert" style="display: none;">
+    <div class="alert-container">
+      <div class="alert-icon-wrap">
+        <svg id="alertIcon" class="alert-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="8" x2="12" y2="12"></line>
+          <line x1="12" y1="16" x2="12.01" y2="16"></line>
+        </svg>
+      </div>
+      <div class="alert-body">
+        <strong id="alertTitle" class="alert-title">Notification</strong>
+        <p id="alertMessage" class="alert-text">Alert description goes here.</p>
+      </div>
+      <button id="alertCloseBtn" class="alert-close-btn" aria-label="Dismiss alert">&times;</button>
+    </div>
+  </div>
+
+  <div class="app-layout">
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="brand-logo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+            <line x1="12" y1="19" x2="12" y2="22"></line>
+            <line x1="8" y1="22" x2="16" y2="22"></line>
+          </svg>
+        </div>
+        <div class="brand-info">
+          <h1 class="brand-title">VoiceScribe <span class="brand-badge">Pro</span></h1>
+          <p class="brand-subtitle">Continuous Voice-to-Text Dictation</p>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <!-- Live Status Indicator -->
+        <div id="statusIndicator" class="status-indicator status-idle" aria-live="polite">
+          <span class="status-dot"></span>
+          <span id="statusLabel" class="status-text">Idle (Ready)</span>
+        </div>
+
+        <!-- Language Selector -->
+        <div class="lang-selector-group">
+          <label for="languageSelect" class="lang-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-sm">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="2" y1="12" x2="22" y2="12"></line>
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+            </svg>
+            <span class="lang-label-text">Language:</span>
+          </label>
+          <div class="select-wrapper">
+            <select id="languageSelect" class="language-dropdown">
+              <option value="en-IN" selected>English (India)</option>
+              <option value="en-US">English (United States)</option>
+              <option value="ta-IN">Tamil - தமிழ் (India)</option>
+              <option value="hi-IN">Hindi - हिन्दी (India)</option>
+            </select>
+            <svg class="select-chevron" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+            </svg>
+          </div>
+        </div>
+
+        <!-- Help Info Button -->
+        <button id="infoModalBtn" class="icon-button" title="How it works & Browser Requirements" aria-label="Open application help guide">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-md">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- Microphone Hero Control Panel -->
+      <section class="mic-hero-card" aria-label="Microphone Controls">
+        <div class="mic-visualizer-container">
+          <!-- Animated Pulsing Ripples (Active when listening) -->
+          <div class="mic-ripple-ring ripple-1"></div>
+          <div class="mic-ripple-ring ripple-2"></div>
+          <div class="mic-ripple-ring ripple-3"></div>
+
+          <!-- Hero Microphone Button -->
+          <button id="micHeroBtn" class="mic-hero-btn" aria-label="Toggle speech recognition" title="Click to Start or Stop Listening">
+            <div class="mic-btn-inner">
+              <svg id="micHeroIcon" class="mic-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                <line x1="12" y1="19" x2="12" y2="22"></line>
+                <line x1="8" y1="22" x2="16" y2="22"></line>
+              </svg>
+            </div>
+          </button>
+        </div>
+
+        <!-- Live Audio Wave Bars Graphic -->
+        <div id="soundWaves" class="sound-waves" aria-hidden="true">
+          <span class="wave-bar"></span>
+          <span class="wave-bar"></span>
+          <span class="wave-bar"></span>
+          <span class="wave-bar"></span>
+          <span class="wave-bar"></span>
+          <span class="wave-bar"></span>
+          <span class="wave-bar"></span>
+          <span class="wave-bar"></span>
+        </div>
+
+        <p id="micStateMessage" class="mic-state-message">
+          Microphone is idle. Click <strong>Start Listening</strong> to begin continuous voice typing.
+        </p>
+
+        <!-- Primary Control Buttons Bar -->
+        <div class="controls-toolbar" role="group" aria-label="Microphone actions">
+          <!-- Start Listening -->
+          <button id="startBtn" class="btn btn-primary" title="Start continuous voice recognition">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            <span>Start Listening</span>
+          </button>
+
+          <!-- Pause Listening -->
+          <button id="pauseBtn" class="btn btn-secondary" disabled title="Temporarily pause voice recognition">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="6" y="4" width="4" height="16"></rect>
+              <rect x="14" y="4" width="4" height="16"></rect>
+            </svg>
+            <span>Pause</span>
+          </button>
+
+          <!-- Resume Listening -->
+          <button id="resumeBtn" class="btn btn-secondary btn-resume" disabled title="Resume speech recognition">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
+              <polygon points="5 3 19 12 5 21 5 3"></polygon>
+            </svg>
+            <span>Resume</span>
+          </button>
+
+          <!-- Stop Listening -->
+          <button id="stopBtn" class="btn btn-danger" disabled title="Stop recognition completely and disable auto-restart">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="5" y="5" width="14" height="14" rx="2"></rect>
+            </svg>
+            <span>Stop</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Stats Bar (Words, Characters, Timer, Recoveries) -->
+      <section class="stats-card" aria-label="Speech Statistics">
+        <div class="stat-item">
+          <div class="stat-icon stat-icon-blue">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+              <polyline points="10 9 9 9 8 9"></polyline>
+            </svg>
+          </div>
+          <div class="stat-data">
+            <span id="wordCount" class="stat-value">0</span>
+            <span class="stat-title">Words</span>
+          </div>
+        </div>
+
+        <div class="stat-item">
+          <div class="stat-icon stat-icon-teal">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 7V4h16v3M9 20h6M12 4v16"></path>
+            </svg>
+          </div>
+          <div class="stat-data">
+            <span id="charCount" class="stat-value">0</span>
+            <span class="stat-title">Characters</span>
+          </div>
+        </div>
+
+        <div class="stat-item">
+          <div class="stat-icon stat-icon-indigo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+          </div>
+          <div class="stat-data">
+            <span id="elapsedTime" class="stat-value font-mono">00:00</span>
+            <span class="stat-title">Listening Time</span>
+          </div>
+        </div>
+
+        <div class="stat-item">
+          <div class="stat-icon stat-icon-emerald">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+            </svg>
+          </div>
+          <div class="stat-data">
+            <span id="restartCount" class="stat-value">0</span>
+            <span class="stat-title">Auto Restarts</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Main Transcription Editor Workspace -->
+      <section class="editor-section" aria-label="Transcribed Text Editor">
+        <div class="editor-header">
+          <div class="editor-header-left">
+            <h2 class="editor-title">Transcribed Text</h2>
+            <span class="editor-subtitle">Directly editable &bull; Changes auto-saved</span>
+          </div>
+
+          <!-- Quick Text Insertion & Font Sizing -->
+          <div class="editor-header-right">
+            <div class="font-controls" role="group" aria-label="Text size">
+              <button id="fontSizeDecBtn" class="pill-btn" title="Decrease font size" aria-label="Decrease font size">A-</button>
+              <button id="fontSizeResetBtn" class="pill-btn font-size-display" title="Reset font size to 16px">16px</button>
+              <button id="fontSizeIncBtn" class="pill-btn" title="Increase font size" aria-label="Increase font size">A+</button>
+            </div>
+
+            <!-- Editor Action Buttons: Copy, Download, Clear -->
+            <div class="editor-actions">
+              <button id="copyBtn" class="action-btn" title="Copy text to clipboard">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-sm">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                <span>Copy</span>
+              </button>
+
+              <button id="downloadBtn" class="action-btn" title="Download text as .txt file">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-sm">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="7 10 12 15 17 10"></polyline>
+                  <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                <span>Download .txt</span>
+              </button>
+
+              <button id="clearBtn" class="action-btn action-btn-danger" title="Clear all text">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-sm">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                </svg>
+                <span>Clear</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Punctuation Helper Bar -->
+        <div class="punctuation-bar" aria-label="Quick punctuation shortcuts">
+          <span class="punctuation-hint">Quick Insert:</span>
+          <button class="punct-chip" data-punct="." title="Insert Period">. Period</button>
+          <button class="punct-chip" data-punct="," title="Insert Comma">, Comma</button>
+          <button class="punct-chip" data-punct="?" title="Insert Question Mark">? Question</button>
+          <button class="punct-chip" data-punct="!" title="Insert Exclamation">! Exclamation</button>
+          <button class="punct-chip" data-punct="&#10;&#10;" title="Insert New Paragraph">↵ New Line</button>
+        </div>
+
+        <!-- The Interactive Text Editor Surface -->
+        <div class="editor-container" id="editorContainer">
+          <div
+            id="textEditor"
+            class="text-editor"
+            contenteditable="true"
+            spellcheck="true"
+            role="textbox"
+            aria-multiline="true"
+            aria-label="Transcribed speech content"
+            data-placeholder="Your spoken words will appear here continuously in real time. Click 'Start Listening' and speak into your microphone..."
+          ></div>
+
+          <!-- Interim Speech Floating / Inline Preview Indicator -->
+          <div id="interimBadge" class="interim-indicator" style="display: none;">
+            <span class="interim-pulsing-icon"></span>
+            <span class="interim-label">Transcribing:</span>
+            <span id="interimTextPreview" class="interim-text">...</span>
+          </div>
+        </div>
+
+        <!-- Editor Footer: Tips & Status -->
+        <div class="editor-footer">
+          <div class="editor-tip">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-xs">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="16" x2="12" y2="12"></line>
+              <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+            <span>Tip: You can edit the text manually at any time without interrupting voice dictation.</span>
+          </div>
+          <div class="auto-restart-status">
+            <span class="auto-restart-pill">Continuous Recovery: <strong id="restartRecoveryStatus">Active</strong></span>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <p>VoiceScribe &bull; Built with standard HTML5, CSS3, &amp; Vanilla JavaScript using the Web Speech API.</p>
+    </footer>
+  </div>
+
+  <!-- Confirmation Modal for Clearing Text -->
+  <div id="clearConfirmModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modalTitle" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-icon-badge danger">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+          <line x1="12" y1="9" x2="12" y2="13"></line>
+          <line x1="12" y1="17" x2="12.01" y2="17"></line>
+        </svg>
+      </div>
+      <h3 id="modalTitle" class="modal-title">Clear All Transcribed Text?</h3>
+      <p class="modal-description">This will delete all content from the editor. This action cannot be undone.</p>
+      <div class="modal-actions">
+        <button id="cancelClearBtn" class="btn btn-secondary">Cancel</button>
+        <button id="confirmClearBtn" class="btn btn-danger">Yes, Clear Text</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Help & Information Modal -->
+  <div id="infoModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="infoTitle" style="display: none;">
+    <div class="modal-card modal-card-lg">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <div class="modal-icon-badge blue">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="12" y1="16" x2="12" y2="12"></line>
+              <line x1="12" y1="8" x2="12.01" y2="8"></line>
+            </svg>
+          </div>
+          <h3 id="infoTitle" class="modal-title">VoiceScribe Guide &amp; Browser Requirements</h3>
+        </div>
+        <button id="closeInfoModalBtn" class="alert-close-btn" aria-label="Close modal">&times;</button>
+      </div>
+
+      <div class="modal-body-content">
+        <div class="guide-section">
+          <h4>🚀 How Continuous Voice-to-Text Works</h4>
+          <p>This application utilizes the <strong>W3C Web Speech API</strong> with an intelligent self-healing continuous loop. By default, web browsers limit continuous recognition sessions to short intervals of speech or silence. VoiceScribe safely catches automatic session closures and seamlessly restarts the microphone without discarding your previously dictated text or causing duplicate words.</p>
+        </div>
+
+        <div class="guide-section">
+          <h4>🌐 Internet Connection Requirement</h4>
+          <p>In Google Chrome and Chromium-based browsers, the Web Speech API transmits audio to Google's cloud speech recognition engines for high-accuracy processing. Therefore, an <strong>active internet connection is required</strong> for speech recognition to function.</p>
+        </div>
+
+        <div class="guide-section">
+          <h4>💻 Browser &amp; Localhost / HTTPS Requirements</h4>
+          <ul>
+            <li><strong>Supported Browsers:</strong> Google Chrome (Desktop &amp; Android), Microsoft Edge, Brave, Opera. (Firefox and Safari do not support the full Web Speech API recognition interface).</li>
+            <li><strong>Security Policy:</strong> Web browsers strictly require microphone access to be served via <code>localhost</code> (e.g. <code>http://127.0.0.1:5500</code> via VS Code Live Server) or a secure <code>https://</code> origin. Opening the file directly via <code>file:///</code> may block microphone permissions in some Chrome installations.</li>
+          </ul>
+        </div>
+
+        <div class="guide-section">
+          <h4>🛠️ Quick Tips for Best Results</h4>
+          <ul>
+            <li>Select your preferred dialect (English India/US, Tamil, or Hindi) before starting.</li>
+            <li>Use a clear external microphone or headset for superior recognition in noisy rooms.</li>
+            <li>Click <strong>Pause</strong> if you need to talk to someone else without losing your session.</li>
+            <li>Click <strong>Stop</strong> when you are finished; this cleanly turns off the microphone and halts auto-restart.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button id="dismissInfoModalBtn" class="btn btn-primary">Got it, Let's Dictate</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+  <!-- Main JavaScript File -->
+  <script src="script.js"></script>
+</body>
+</html>
